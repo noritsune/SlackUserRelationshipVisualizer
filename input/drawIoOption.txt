@@ -1,0 +1,30 @@
+﻿# label: %name%<br><i style="color:gray;">
+#
+# style: label;image=%image%;whiteSpace=wrap;html=1;rounded=1; ;strokeColor=#656565;
+# parentstyle: swimlane;whiteSpace=wrap;html=1;childLayout=stackLayout;horizontal=1;horizontalStack=0;resizeParent=1;resizeLast=0;collapsible=1;
+#
+# namespace: csvimport-
+#
+# connect: {"from": "manager", "to": "name", "invert": true, "label": "manages", "style": "curved=1;endArrow=blockThin;endFill=1;fontSize=11;"}
+# connect: {"from": "refs1", "to": "id", "style": "curved=1;fontSize=11;strokeWidth=1;"}
+# connect: {"from": "refs2", "to": "id", "style": "curved=1;fontSize=11;strokeWidth=2;"}
+# connect: {"from": "refs3", "to": "id", "style": "curved=1;fontSize=11;strokeWidth=3;"}
+#
+## Node width and height, and padding for autosize
+# width: auto
+# height: auto
+# padding: -12
+#
+# ignore: id,image,fill,stroke,refs,manager
+#
+## Column to be renamed to link attribute (used as link).
+# link: url
+#
+## Spacing between nodes, heirarchical levels and parallel connections.
+# nodespacing:  200
+# levelspacing: 100
+# edgespacing:  200
+#
+# layout: auto
+#
+## ---- CSV below this line. First line are column names. ----
