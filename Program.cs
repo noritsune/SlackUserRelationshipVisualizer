@@ -1,5 +1,6 @@
 ﻿using System.Text;
 using System.Text.RegularExpressions;
+using Newtonsoft.Json;
 using SlackAPI;
 using SlackAPI.RPCMessages;
 using File = System.IO.File;
@@ -15,11 +16,15 @@ internal static class Program
     const string DRAW_IO_OPTION_FILE_PATH = IN_DIR_PATH + "drawIoOption.txt";
 
     // 出力場所
+    const string MSG_BY_CHANNEL_OUT_DIR_PATH = OUT_DIR_PATH + "messages/channels/";
     const string REL_FOR_DRAW_IO_CSV_FILE_PATH = OUT_DIR_PATH + "relation_forDrawIo.csv";
     const string REL_PURE_CSV_FILE_PATH = OUT_DIR_PATH + "relation_pure.csv";
 
     // 何日前までのメッセージを取得するか
     const int DAYS = 30;
+
+    // デバッグ用設定
+    const bool IS_LOAD_MSG_FROM_FILE = false;
 
     static async Task Main()
     {
@@ -30,7 +35,9 @@ internal static class Program
         Console.WriteLine($"調査対象のチャンネル: {channels.Count}件");
 
         // まずは対象期間のメッセージ全てを取得する
-        var messages = await FetchMessages(channels, slackClient);
+        var messages = IS_LOAD_MSG_FROM_FILE
+            ? await LoadMessagesFromFile()
+            : await FetchMessagesInChannels(channels, slackClient);
         Console.WriteLine($"調査対象のメッセージ: {messages.Count}件");
 
         // 調査対象となるユーザーを取得する
@@ -70,34 +77,69 @@ internal static class Program
             .ToList();
     }
 
-    static async Task<List<Message>> FetchMessages(List<Channel> channels, SlackTaskClient slackClient)
+    static async Task<List<Message>> FetchMessagesInChannels(List<Channel> channels, SlackTaskClient slackClient)
     {
         var oldest = DateTime.UtcNow - TimeSpan.FromDays(DAYS);
+        Console.WriteLine($"メッセージ取得期間: {oldest}以降");
+
+        var msgDir = new DirectoryInfo(MSG_BY_CHANNEL_OUT_DIR_PATH);
+        if (msgDir.Exists) msgDir.Delete(true);
+        msgDir.Create();
+
         var messages = new List<Message>();
-        for (var i = 0; i < channels.Count; i++)
+        // 並列で実行する
+        // 進捗をコンソールに出力する
+        var completedChannelCnt = 0;
+        await Task.WhenAll(channels.Select(async channel =>
         {
-            var channel = channels[i];
-            Console.WriteLine($"[{i + 1}/{channels.Count}] チャンネル: {channel.name}のメッセージを取得開始");
-            try
-            {
-                List<Tuple<string, string>> tupleList = new List<Tuple<string, string>>()
-                {
-                    new("channel", channel.id),
-                    new("oldest", oldest.ToProperTimeStamp()),
-                    new("limit", "1000")
-                };
-                var convHistoryRes = await slackClient
-                    .APIRequestWithTokenAsync<ConversationsMessageHistory>(tupleList.ToArray());
+            var messagesInChannel = await FetchMessagesInChannel(slackClient, channel, oldest);
+            messages.AddRange(messagesInChannel);
+            completedChannelCnt++;
+            Console.WriteLine($"チャンネル数: {completedChannelCnt}/{channels.Count}, メッセージ数: {messages.Count}");
 
-                if (!convHistoryRes.ok) throw new Exception(convHistoryRes.error);
+            var filePath = MSG_BY_CHANNEL_OUT_DIR_PATH + channel.name + ".json";
+            var messageList = new MessageList(messagesInChannel);
+            await File.WriteAllTextAsync(filePath, JsonConvert.SerializeObject(messageList, Formatting.Indented));
+        }));
 
-                messages.AddRange(convHistoryRes.messages);
-                Console.WriteLine($"チャンネル: {channel.name}のメッセージを取得完了。{convHistoryRes.messages.Length}件");
-            }
-            catch (Exception e)
+        return messages;
+    }
+
+    static async Task<List<Message>> FetchMessagesInChannel(SlackTaskClient slackClient, Channel channel, DateTime oldest)
+    {
+        Console.WriteLine($"チャンネル: {channel.name}のメッセージを取得開始");
+        try
+        {
+            List<Tuple<string, string>> tupleList = new List<Tuple<string, string>>()
             {
-                Console.WriteLine("Failed to get message history.: " + e);
-            }
+                new("channel", channel.id),
+                new("oldest", oldest.ToProperTimeStamp()),
+                new("limit", "1000")
+            };
+            var convHistoryRes = await slackClient
+                .APIRequestWithTokenAsync<ConversationsMessageHistory>(tupleList.ToArray());
+
+            if (!convHistoryRes.ok) throw new Exception(convHistoryRes.error);
+
+            Console.WriteLine($"チャンネル: {channel.name}のメッセージを取得成功。{convHistoryRes.messages.Length}件");
+            return convHistoryRes.messages.ToList();
+        }
+        catch
+        {
+            Console.WriteLine($"チャンネル: {channel.name}のメッセージを取得失敗");
+            return new List<Message>();
+        }
+    }
+
+    static async Task<List<Message>> LoadMessagesFromFile()
+    {
+        var messages = new List<Message>();
+        var files = Directory.GetFiles(MSG_BY_CHANNEL_OUT_DIR_PATH);
+        foreach (var file in files)
+        {
+            var messagesStr = await File.ReadAllTextAsync(file);
+            var messageList = JsonConvert.DeserializeObject<MessageList>(messagesStr);
+            messages.AddRange(messageList.messages);
         }
 
         return messages;
@@ -210,9 +252,9 @@ internal static class Program
         // draw.ioで読み込めるように、オプションを付けて出力する
         var csvForDrawIo = new StringBuilder();
         var drawIoOptionStr = await File.ReadAllTextAsync(DRAW_IO_OPTION_FILE_PATH);
-        csvForDrawIo.AppendLine(drawIoOptionStr);
-        csvForDrawIo.AppendLine(csv.ToString());
-        await File.WriteAllTextAsync(REL_FOR_DRAW_IO_CSV_FILE_PATH, csv.ToString());
+        csvForDrawIo.Append(drawIoOptionStr);
+        csvForDrawIo.Append(csv.ToString());
+        await File.WriteAllTextAsync(REL_FOR_DRAW_IO_CSV_FILE_PATH, csvForDrawIo.ToString());
 
         // 一応、関係表のみのcsvも出しておく
         await File.WriteAllTextAsync(REL_PURE_CSV_FILE_PATH, csv.ToString());
