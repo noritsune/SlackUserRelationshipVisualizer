@@ -17,6 +17,7 @@ internal static class Program
 
     // 出力場所
     const string MSG_BY_CHANNEL_OUT_DIR_PATH = OUT_DIR_PATH + "messages/channels/";
+    const string MSG_BY_USER_OUT_DIR_PATH = OUT_DIR_PATH + "messages/user/";
     const string REL_FOR_DRAW_IO_CSV_FILE_PATH = OUT_DIR_PATH + "relation_forDrawIo.csv";
     const string REL_PURE_CSV_FILE_PATH = OUT_DIR_PATH + "relation_pure.csv";
 
@@ -48,6 +49,9 @@ internal static class Program
         Console.WriteLine("メッセージの集計開始");
         var userRelDict = BuildUserRelationDict(activeUsers, messages);
         Console.WriteLine("メッセージの集計終了");
+
+        // デバッグ用にメンションメッセージ群をユーザー毎にファイルに保存
+        SaveUserRelationDictToFile(userRelDict, activeUsers);
 
         var maxMsgCnt = userRelDict
             .SelectMany(u => u.Value.Select(kv => kv.Value.Count))
@@ -194,6 +198,35 @@ internal static class Program
         }
 
         return userRelDict;
+    }
+
+    static void SaveUserRelationDictToFile(Dictionary<string, Dictionary<string, List<Message>>> userRelDict,
+        List<User> users)
+    {
+        var dir = new DirectoryInfo(MSG_BY_USER_OUT_DIR_PATH);
+        if (dir.Exists) dir.Delete(true);
+        dir.Create();
+
+        var idToUser = users.ToDictionary(u => u.id, u => u);
+        foreach (var (fromUserId, toUserToMsgs) in userRelDict)
+        {
+            var fromUser = idToUser[fromUserId];
+            var filePath = MSG_BY_USER_OUT_DIR_PATH + fromUser.name + ".csv";
+            using var sw = new StreamWriter(filePath, false, Encoding.UTF8);
+            sw.WriteLine("toUser.name,message.text");
+            foreach (var (toUserId, msgs) in toUserToMsgs)
+            {
+                var toUser = idToUser[toUserId];
+                foreach (var msg in msgs)
+                {
+                    var escapedMsgText = msg.text
+                        .Replace(",", "，")
+                        .Replace("\r", " ")
+                        .Replace("\n", " ");
+                    sw.WriteLine($"{toUser.name},{escapedMsgText}");
+                }
+            }
+        }
     }
 
     static Dictionary<string, List<Message>> BuildToUserToMsgs(List<string> toUserIds, Message msg)
