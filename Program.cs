@@ -193,8 +193,14 @@ internal static class Program
                 .ToList();
             if (toUserIds.Count == 0) continue;
 
-            var toUserToMsgs = BuildToUserToMsgs(toUserIds, message);
-            userRelDict[fromUserId] = toUserToMsgs;
+            foreach (var toUserId in toUserIds)
+            {
+                if (!userRelDict[fromUserId].ContainsKey(toUserId))
+                {
+                    userRelDict[fromUserId][toUserId] = new List<Message>();
+                }
+                userRelDict[fromUserId][toUserId].Add(message);
+            }
         }
 
         return userRelDict;
