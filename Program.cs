@@ -211,7 +211,7 @@ internal static class Program
         foreach (var (fromUserId, toUserToMsgs) in userRelDict)
         {
             var fromUser = idToUser[fromUserId];
-            var filePath = MSG_BY_USER_OUT_DIR_PATH + fromUser.name + ".csv";
+            var filePath = MSG_BY_USER_OUT_DIR_PATH + fromUser.real_name + ".csv";
             using var sw = new StreamWriter(filePath, false, Encoding.UTF8);
             sw.WriteLine("toUser.name,message.text");
             foreach (var (toUserId, msgs) in toUserToMsgs)
@@ -223,7 +223,7 @@ internal static class Program
                         .Replace(",", "，")
                         .Replace("\r", " ")
                         .Replace("\n", " ");
-                    sw.WriteLine($"{toUser.name},{escapedMsgText}");
+                    sw.WriteLine($"{toUser.real_name},{escapedMsgText}");
                 }
             }
         }
