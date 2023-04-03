@@ -9,6 +9,8 @@
 # connect: {"from": "refs1", "to": "id", "style": "curved=1;fontSize=11;strokeWidth=1;"}
 # connect: {"from": "refs2", "to": "id", "style": "curved=1;fontSize=11;strokeWidth=2;"}
 # connect: {"from": "refs3", "to": "id", "style": "curved=1;fontSize=11;strokeWidth=3;"}
+# connect: {"from": "refs4", "to": "id", "style": "curved=1;fontSize=11;strokeWidth=4;"}
+# connect: {"from": "refs5", "to": "id", "style": "curved=1;fontSize=11;strokeWidth=5;"}
 #
 ## Node width and height, and padding for autosize
 # width: auto

@@ -255,32 +255,34 @@ internal static class Program
     /// </summary>
     static async Task OutputFiles(Dictionary<string, Dictionary<string, List<Message>>> userRelDict, List<User> activeUsers, int maxMsgCnt)
     {
+        const int STRENGTH_CLASS_DIV = 5;
+
         var csv = new StringBuilder();
-        csv.AppendLine("id,name,refs1,refs2,refs3,image");
+        csv.AppendLine("id,name,refs1,refs2,refs3,refs4,refs5,image");
         foreach (var (fromId, toIdToMsgs) in userRelDict)
         {
             var fromUser = activeUsers.Find(u => u.id == fromId);
             // 警告がうざいので念のため回避
             if (fromUser == null) continue;
 
-            // メッセージ数の相対的な量によって3段階に分ける
-            var toIdsStrength1 = toIdToMsgs
-                .Where(kv => kv.Value.Count < maxMsgCnt * 0.33)
-                .Select(kv => kv.Key)
-                .ToList();
-            var toIdsStrength2 = toIdToMsgs
-                .Where(kv => kv.Value.Count >= maxMsgCnt * 0.33 && kv.Value.Count < maxMsgCnt * 0.66)
-                .Select(kv => kv.Key)
-                .ToList();
-            var toIdsStrength3 = toIdToMsgs
-                .Where(kv => kv.Value.Count >= maxMsgCnt * 0.66)
-                .Select(kv => kv.Key)
+            // 相対的なメッセージ数によって関係の強さをSTRENGTH_CLASS_DIV段階に分ける
+            var toIdsStrI = new List<List<string>>();
+            for (var i = 0; i < STRENGTH_CLASS_DIV; i++)
+            {
+                toIdsStrI.Add(new List<string>());
+            }
+            foreach (var (toId, msgs) in toIdToMsgs)
+            {
+                var strength = msgs.Count / (double)maxMsgCnt;
+                var strengthClass = Math.Min(4, (int)(strength * STRENGTH_CLASS_DIV));
+                toIdsStrI[strengthClass].Add(toId);
+            }
+
+            var refsStr = toIdsStrI
+                .Select(toIds => $"\"{string.Join(",", toIds)}\"")
                 .ToList();
 
-            var refs1 = $"\"{string.Join(",", toIdsStrength1)}\"";
-            var refs2 = $"\"{string.Join(",", toIdsStrength2)}\"";
-            var refs3 = $"\"{string.Join(",", toIdsStrength3)}\"";
-            csv.AppendLine($"{fromId},{fromUser.real_name},{refs1},{refs2},{refs3},{fromUser.profile.image_48}");
+            csv.AppendLine($"{fromId},{fromUser.real_name},{refsStr[0]},{refsStr[1]},{refsStr[2]},{refsStr[3]},{refsStr[4]},{fromUser.profile.image_48}");
         }
 
         if (!Directory.Exists(OUT_DIR_PATH))
