@@ -201,7 +201,10 @@ internal static class Program
         dir.Create();
 
         var idToUser = users.ToDictionary(u => u.Id, u => u);
-        foreach (var (fromUserId, toUserToMsgs) in userRelDict)
+        var userRelDictSorted = userRelDict
+            .OrderBy(kv => kv.Value.Count)
+            .ToDictionary(kv => kv.Key, kv => kv.Value);
+        foreach (var (fromUserId, toUserToMsgs) in userRelDictSorted)
         {
             var fromUser = idToUser[fromUserId];
             var filePath = MSG_BY_USER_OUT_DIR_PATH + fromUser.RealName + ".csv";
