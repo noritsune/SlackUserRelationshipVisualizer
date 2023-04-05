@@ -109,10 +109,18 @@ internal static class Program
         Console.WriteLine($"チャンネル: {conv.Name}のメッセージを取得開始");
         try
         {
-            var convHistoryRes = await slackClient.Conversations.History(conv.Id, oldestTs: oldest.ToTimestamp(), limit: 1000);
+            var msgsInChannel = new List<MessageEvent>();
+            string cursor = null;
+            do {
+                var convHistoryRes = await slackClient.Conversations.History(
+                    conv.Id, oldestTs: oldest.ToTimestamp(), limit: 1000, cursor: cursor);
+                msgsInChannel.AddRange(convHistoryRes.Messages);
 
-            Console.WriteLine($"チャンネル: {conv.Name}のメッセージを取得成功。{convHistoryRes.Messages.Count}件");
-            return convHistoryRes.Messages.ToList();
+                cursor = convHistoryRes.ResponseMetadata.NextCursor;
+            } while (cursor != null);
+            Console.WriteLine($"チャンネル: {conv.Name}のメッセージを取得成功。{msgsInChannel.Count}件");
+
+            return msgsInChannel;
         }
         catch(Exception e)
         {
