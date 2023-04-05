@@ -1,10 +1,10 @@
-﻿using SlackAPI;
+﻿using SlackNet.Events;
 
 public class MessageList
 {
-    public List<Message> messages;
+    public List<MessageEvent> messages;
 
-    public MessageList(List<Message> messages)
+    public MessageList(List<MessageEvent> messages)
     {
         this.messages = messages;
     }
