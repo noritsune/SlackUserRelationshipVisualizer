@@ -54,12 +54,8 @@ internal static class Program
         // デバッグ用にメンションメッセージ群をユーザー毎にファイルに保存
         SaveUserRelationDictToFile(userRelDict, activeUsers);
 
-        var maxMsgCnt = userRelDict
-            .SelectMany(u => u.Value.Select(kv => kv.Value.Count))
-            .Max();
-
         Console.WriteLine("結果ファイル出力開始");
-        await OutputFiles(userRelDict, activeUsers, maxMsgCnt);
+        await OutputFiles(userRelDict, activeUsers);
         Console.WriteLine("結果ファイル出力終了");
     }
 
@@ -184,7 +180,8 @@ internal static class Program
             // 送信先が調査対象のユーザーでなければスキップ
             var toUserIds = Regex.Matches(message.Text, "<@([A-Z0-9]+)>")
                 .Select(m => m.Groups[1].Value)
-                .Where(id => activeUserIdSet.Contains(id))
+                // 自身へのメンションがたまに紛れている
+                .Where(id => activeUserIdSet.Contains(id) && id != fromUserId)
                 .ToList();
             if (toUserIds.Count == 0) continue;
 
@@ -235,44 +232,51 @@ internal static class Program
 
     /// <summary>
     /// csvファイルに結果を出力する
-    /// 列は送信者IDをid, 送信者名をname, 送信先idをカンマ区切りでrefs, アイコン画像urlをimageとする
+    /// 列は送信者IDをid, 送信者名をname, アイコン画像urlをimageとする
     /// </summary>
-    static async Task OutputFiles(Dictionary<string, Dictionary<string, List<MessageEvent>>> userRelDict, List<User> activeUsers, int maxMsgCnt)
+    static async Task OutputFiles(Dictionary<string, Dictionary<string, List<MessageEvent>>> userRelDict, List<User> activeUsers)
     {
-        const int STRENGTH_CLASS_DIV = 5;
+        const int STRENGTH_DIV = 5;
+
+        // 事前データ準備
+        var idToUser = activeUsers.ToDictionary(u => u.Id, u => u);
+        var relColCntMax = userRelDict.Sum(kv => kv.Value.Count);
+        var maxMsgCnt = userRelDict
+            .SelectMany(u => u.Value.Select(kv => kv.Value.Count))
+            .Max();
 
         // 繋がりが無いユーザーを先頭に持ってくることでグラフを編集しやすくする
         var userRelDictSorted = userRelDict
             .OrderBy(kv => kv.Value.Count)
             .ToDictionary(kv => kv.Key, kv => kv.Value);
 
-        var csv = new StringBuilder();
-        csv.AppendLine("id,name,refs1,refs2,refs3,refs4,refs5,image");
+        var csvBody = new StringBuilder();
+        var relColLabels = new List<string>();
+        var relNameLabels = new List<string>();
+        var relColStrengths = new List<int>();
         foreach (var (fromId, toIdToMsgs) in userRelDictSorted)
         {
-            var fromUser = activeUsers.Find(u => u.Id == fromId);
-            // 警告がうざいので念のため回避
-            if (fromUser == null) continue;
+            var fromUser = idToUser[fromId];
 
-            // 相対的なメッセージ数によって関係の強さをSTRENGTH_CLASS_DIV段階に分ける
-            var toIdsStrI = new List<List<string>>();
-            for (var i = 0; i < STRENGTH_CLASS_DIV; i++)
-            {
-                toIdsStrI.Add(new List<string>());
-            }
+            var relCells = new string[relColCntMax];
             foreach (var (toId, msgs) in toIdToMsgs)
             {
-                var strength = msgs.Count / (double)maxMsgCnt;
-                var strengthClass = Math.Min(4, (int)(strength * STRENGTH_CLASS_DIV));
-                toIdsStrI[strengthClass].Add(toId);
+                var toUser = idToUser[toId];
+                relCells[relColLabels.Count] = toId;
+                relColLabels.Add($"{fromId}to{toId}");
+                relNameLabels.Add($"{fromUser.RealName}->{toUser.RealName}");
+
+                // 相対的なメッセージ数によって関係の強さをSTRENGTH_CLASS_DIV段階に分ける
+                var norStrength = msgs.Count / (double)maxMsgCnt;
+                // 1 ~ STRENGTH_CLASS_DIVの間をとらせたい
+                var strength = Math.Min(STRENGTH_DIV, (int)(norStrength * STRENGTH_DIV) + 1);
+                relColStrengths.Add(strength);
             }
 
-            var refsStr = toIdsStrI
-                .Select(toIds => $"\"{string.Join(",", toIds)}\"")
-                .ToList();
-
-            csv.AppendLine($"{fromId},{fromUser.RealName},{refsStr[0]},{refsStr[1]},{refsStr[2]},{refsStr[3]},{refsStr[4]},{fromUser.Profile.Image48}");
+            var baseCells = new List<string>() { fromId, fromUser.RealName, fromUser.Profile.Image48 };
+            csvBody.AppendLine(string.Join(",", baseCells.Concat(relCells)));
         }
+        var baseColLabels = new List<string> { "id", "name", "image" };
 
         if (!Directory.Exists(OUT_DIR_PATH))
         {
@@ -280,13 +284,26 @@ internal static class Program
         }
 
         // draw.ioで読み込めるように、オプションを付けて出力する
-        var csvForDrawIo = new StringBuilder();
         var drawIoOptionStr = await File.ReadAllTextAsync(DRAW_IO_OPTION_FILE_PATH);
-        csvForDrawIo.Append(drawIoOptionStr);
-        csvForDrawIo.Append(csv.ToString());
+        var relOptions = new List<string>();
+        for (var i = 0; i < relColLabels.Count; i++)
+        {
+            var colLabel = relColLabels[i];
+            var nameLabel = relNameLabels[i];
+            var strength = relColStrengths[i];
+            relOptions.Add($"# connect: {{\"from\": \"{colLabel}\", \"to\": \"id\", \"label\": \"{nameLabel}\", \"style\": \"curved=1;fontSize=11;strokeWidth={strength};\"}}");
+        }
+        var relOptionsStr = string.Join("\n", relOptions);
+        drawIoOptionStr = drawIoOptionStr.Replace("$REL_OPTIONS$", relOptionsStr);
+
+        var csvForDrawIo = new StringBuilder();
+        csvForDrawIo.AppendLine(drawIoOptionStr);
+        var csvHeader = string.Join(",", baseColLabels.Concat(relColLabels));
+        csvForDrawIo.AppendLine(csvHeader);
+        csvForDrawIo.Append(csvBody);
         await File.WriteAllTextAsync(REL_FOR_DRAW_IO_CSV_FILE_PATH, csvForDrawIo.ToString());
 
         // 一応、関係表のみのcsvも出しておく
-        await File.WriteAllTextAsync(REL_PURE_CSV_FILE_PATH, csv.ToString());
+        await File.WriteAllTextAsync(REL_PURE_CSV_FILE_PATH, csvHeader + "\n" + csvBody);
     }
 }
