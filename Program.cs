@@ -95,8 +95,10 @@ internal static class Program
             Console.WriteLine($"チャンネル数: {completedChannelCnt}/{channels.Count}, メッセージ数: {messages.Count}");
 
             var filePath = MSG_BY_CHANNEL_OUT_DIR_PATH + conv.Name + ".json";
-            var messageList = new MessageList(messagesInChannel);
-            await File.WriteAllTextAsync(filePath, JsonConvert.SerializeObject(messageList, Formatting.Indented));
+            var msgsInChannelJsonSafe = messagesInChannel
+                .Select(JsonSafeMessage.FromMessageEvent)
+                .ToList();
+            await File.WriteAllTextAsync(filePath, JsonConvert.SerializeObject(msgsInChannelJsonSafe, Formatting.Indented));
         }));
 
         return messages;
@@ -121,18 +123,21 @@ internal static class Program
 
     static async Task<List<MessageEvent>> LoadMessagesFromFile()
     {
-        var messages = new List<MessageEvent>();
+        var messagesAll = new List<MessageEvent>();
         var files = Directory.GetFiles(MSG_BY_CHANNEL_OUT_DIR_PATH);
         foreach (var file in files)
         {
             var messagesStr = await File.ReadAllTextAsync(file);
-            var messageList = JsonConvert.DeserializeObject<MessageList>(messagesStr);
-            if (messageList is null) continue;
+            var msgsInChannelJsonSafe = JsonConvert.DeserializeObject<List<JsonSafeMessage>>(messagesStr);
+            if (msgsInChannelJsonSafe is null) continue;
 
-            messages.AddRange(messageList.messages);
+            var msgsInChannel = msgsInChannelJsonSafe
+                .Select(m => m.ToMessageEvent())
+                .ToList();
+            messagesAll.AddRange(msgsInChannel);
         }
 
-        return messages;
+        return messagesAll;
     }
 
     static async Task<List<User>> FetchActiveUsers(SlackApiClient slackClient)
@@ -217,20 +222,6 @@ internal static class Program
         }
     }
 
-    static Dictionary<string, List<MessageEvent>> BuildToUserToMsgs(List<string> toUserIds, MessageEvent msg)
-    {
-        var toUserToMsgs = new Dictionary<string, List<MessageEvent>>();
-        foreach (var toUserId in toUserIds)
-        {
-            if (!toUserToMsgs.ContainsKey(toUserId))
-            {
-                toUserToMsgs[toUserId] = new List<MessageEvent>();
-            }
-            toUserToMsgs[toUserId].Add(msg);
-        }
-        return toUserToMsgs;
-    }
-
     /// <summary>
     /// csvファイルに結果を出力する
     /// 列は送信者IDをid, 送信者名をname, 送信先idをカンマ区切りでrefs, アイコン画像urlをimageとする
@@ -239,9 +230,14 @@ internal static class Program
     {
         const int STRENGTH_CLASS_DIV = 5;
 
+        // 繋がりが無いユーザーを先頭に持ってくることでグラフを編集しやすくする
+        var userRelDictSorted = userRelDict
+            .OrderBy(kv => kv.Value.Count)
+            .ToDictionary(kv => kv.Key, kv => kv.Value);
+
         var csv = new StringBuilder();
         csv.AppendLine("id,name,refs1,refs2,refs3,refs4,refs5,image");
-        foreach (var (fromId, toIdToMsgs) in userRelDict)
+        foreach (var (fromId, toIdToMsgs) in userRelDictSorted)
         {
             var fromUser = activeUsers.Find(u => u.Id == fromId);
             // 警告がうざいので念のため回避
