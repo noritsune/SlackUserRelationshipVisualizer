@@ -27,6 +27,6 @@
 # levelspacing: 100
 # edgespacing:  200
 #
-# layout: auto
+# layout: organic
 #
 ## ---- CSV below this line. First line are column names. ----
