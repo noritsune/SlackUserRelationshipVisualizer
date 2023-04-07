@@ -5,6 +5,9 @@ public class JsonSafeMessage
     public string User;
     public string Text;
     public string Subtype;
+    public string Ts;
+    public string ThreadTs;
+    public int ReplyCount;
 
     public static JsonSafeMessage FromMessageEvent(MessageEvent messageEvent)
     {
@@ -13,6 +16,9 @@ public class JsonSafeMessage
             User = messageEvent.User,
             Text = messageEvent.Text,
             Subtype = messageEvent.Subtype,
+            Ts = messageEvent.Ts,
+            ThreadTs = messageEvent.ThreadTs,
+            ReplyCount = messageEvent.ReplyCount,
         };
     }
 
@@ -23,6 +29,9 @@ public class JsonSafeMessage
             User = User,
             Text = Text,
             Subtype = Subtype,
+            Ts = Ts,
+            ThreadTs = ThreadTs,
+            ReplyCount = ReplyCount,
         };
     }
 }

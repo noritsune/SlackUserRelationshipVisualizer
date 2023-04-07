@@ -1,9 +1,11 @@
-﻿using System.Text;
+﻿using System.Diagnostics;
+using System.Text;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using SlackNet;
 using SlackNet.Events;
 using SlackNet.WebApi;
+using SlackUserRelationshipVisualizer;
 using File = System.IO.File;
 
 internal static class Program
@@ -48,14 +50,14 @@ internal static class Program
 
         // メンバー間のメッセージを集計する
         Console.WriteLine("メッセージの集計開始");
-        var userRelDict = BuildUserRelationDict(activeUsers, messages);
+        var userRelList = BuildUserRelationListAboutActiveUsers(activeUsers, messages);
         Console.WriteLine("メッセージの集計終了");
 
         // デバッグ用にメンションメッセージ群をユーザー毎にファイルに保存
-        SaveUserRelationDictToFile(userRelDict, activeUsers);
+        SaveUserRelationDictToFile(userRelList, activeUsers);
 
         Console.WriteLine("結果ファイル出力開始");
-        await OutputFiles(userRelDict, activeUsers);
+        await OutputFiles(userRelList, activeUsers);
         Console.WriteLine("結果ファイル出力終了");
     }
 
@@ -105,17 +107,41 @@ internal static class Program
         Console.WriteLine($"チャンネル: {conv.Name}のメッセージを取得開始");
         try
         {
-            var msgsInChannel = new List<MessageEvent>();
+            // ルートメッセージ群を取得
+            var rootMsgs = new List<MessageEvent>();
+            var sw = new Stopwatch();
+            sw.Start();
+            Console.WriteLine($"チャンネル: {conv.Name}のルートメッセージを取得開始");
             string cursor = null;
             do {
                 var convHistoryRes = await slackClient.Conversations.History(
                     conv.Id, oldestTs: oldest.ToTimestamp(), limit: 1000, cursor: cursor);
-                msgsInChannel.AddRange(convHistoryRes.Messages);
+                rootMsgs.AddRange(convHistoryRes.Messages);
 
                 cursor = convHistoryRes.ResponseMetadata.NextCursor;
             } while (cursor != null);
-            Console.WriteLine($"チャンネル: {conv.Name}のメッセージを取得成功。{msgsInChannel.Count}件");
+            Console.WriteLine($"チャンネル: {conv.Name}のルートメッセージを{rootMsgs.Count}件取得完了: {sw.Elapsed.Seconds}秒");
 
+            // スレッドメッセージ群を取得
+            var msgsInThread = new List<MessageEvent>();
+            var threadHeadMsgs = rootMsgs.Where(m => m.ReplyCount > 0).ToList();
+            // 時間を計測する
+            sw.Start();
+            Console.WriteLine($"チャンネル: {conv.Name}の{threadHeadMsgs.Count}件のスレッドの返信を取得開始");
+            // スレッド内の返信を並列で全て取得する
+            await Task.WhenAll(threadHeadMsgs.Select(async rootMsg =>
+            {
+                var threadHistoryRes = await slackClient.Conversations.Replies(
+                    conv.Id, rootMsg.Ts, oldestTs: oldest.ToTimestamp(), limit: 1000);
+                var replyMsgs = threadHistoryRes.Messages.Where(m => m.Ts != rootMsg.Ts).ToList();
+                msgsInThread.AddRange(replyMsgs);
+            }));
+            sw.Stop();
+            Console.WriteLine($"チャンネル: {conv.Name}の{threadHeadMsgs.Count}件のスレッドの返信を取得完了: {sw.Elapsed.Seconds}秒");
+
+            // ルートメッセージとスレッドメッセージを重複なしで結合したものがチャンネル内の全メッセージとなる
+            var msgsInChannel = rootMsgs.Concat(msgsInThread).ToList();
+            Console.WriteLine($"チャンネル: {conv.Name}のメッセージを取得成功。{msgsInChannel.Count}件");
             return msgsInChannel;
         }
         catch(Exception e)
@@ -154,14 +180,14 @@ internal static class Program
             .ToList();
     }
 
-    static Dictionary<string, Dictionary<string, List<MessageEvent>>> BuildUserRelationDict(List<User> activeUsers, List<MessageEvent> messages)
+    static UserRelationList BuildUserRelationListAboutActiveUsers(List<User> activeUsers, List<MessageEvent> messages)
     {
-        var userRelDict = new Dictionary<string, Dictionary<string, List<MessageEvent>>>();
-        foreach (var activeUser in activeUsers)
-        {
-            userRelDict[activeUser.Id] = new Dictionary<string, List<MessageEvent>>();
-        }
+        var threadTsToMsgsInThread = messages
+            .Where(m => m.ThreadTs != null)
+            .GroupBy(m => m.ThreadTs)
+            .ToDictionary(g => g.Key, g => g.ToList());
 
+        var userRelsForAllMsgs = new List<UserRelation>();
         var activeUserIdSet = activeUsers.Select(u => u.Id).ToHashSet();
         var nonConvSubtypes = new HashSet<string>
         {
@@ -176,6 +202,14 @@ internal static class Program
             var fromUserId = message.User;
             if (!activeUserIdSet.Contains(fromUserId)) continue;
 
+            if (message.ReplyCount > 0)
+            {
+                // スレッド内の会話を関係性として登録する
+                var msgsInThread = threadTsToMsgsInThread[message.ThreadTs];
+                var userRelsInThread = GatherUserRelationsInThread(msgsInThread);
+                userRelsForAllMsgs.AddRange(userRelsInThread);
+            }
+
             // メンション先のユーザーIDを抽出する。複数あることがある
             // 送信先が調査対象のユーザーでなければスキップ
             var toUserIds = Regex.Matches(message.Text, "<@([A-Z0-9]+)>")
@@ -185,40 +219,61 @@ internal static class Program
                 .ToList();
             if (toUserIds.Count == 0) continue;
 
-            foreach (var toUserId in toUserIds)
-            {
-                if (!userRelDict[fromUserId].ContainsKey(toUserId))
-                {
-                    userRelDict[fromUserId][toUserId] = new List<MessageEvent>();
-                }
-                userRelDict[fromUserId][toUserId].Add(message);
-            }
+            // メンション先のユーザーIDを関係性として登録する
+            var userRelsInMention = toUserIds
+                .Select(toUserId => new UserRelation(fromUserId, toUserId, message))
+                .ToList();
+            userRelsForAllMsgs.AddRange(userRelsInMention);
         }
 
-        return userRelDict;
+        var userRelsAboutActiveUsers = userRelsForAllMsgs
+            .Where(rel => activeUserIdSet.Contains(rel.FromUserId) && activeUserIdSet.Contains(rel.ToUserId))
+            .ToList();
+
+        return new UserRelationList(userRelsAboutActiveUsers);
     }
 
-    static void SaveUserRelationDictToFile(Dictionary<string, Dictionary<string, List<MessageEvent>>> userRelDict,
-        List<User> users)
+    static List<UserRelation> GatherUserRelationsInThread(List<MessageEvent> msgsInThread)
+    {
+        var msgsInThreadAscSortedByTs = msgsInThread.OrderBy(m => m.Ts).ToList();
+        var toUserIds = new HashSet<string>{ msgsInThreadAscSortedByTs.First().User };
+        var userRels = new List<UserRelation>();
+        foreach (var msg in msgsInThreadAscSortedByTs.Skip(1))
+        {
+            var fromUserId = msg.User;
+            // スレッドに書き込まれたメッセージはそれ以前にメッセージを書き込んだ全てのユーザーに向けたものと解釈する
+            toUserIds
+                .Where(toUserId => toUserId != fromUserId)
+                .Select(toUserId => new UserRelation(fromUserId, toUserId, msg))
+                .ToList()
+                .ForEach(userRels.Add);
+
+            toUserIds.Add(fromUserId);
+        }
+
+        return userRels;
+    }
+
+    static void SaveUserRelationDictToFile(UserRelationList userRelList, List<User> users)
     {
         var dir = new DirectoryInfo(MSG_BY_USER_OUT_DIR_PATH);
         if (dir.Exists) dir.Delete(true);
         dir.Create();
 
         var idToUser = users.ToDictionary(u => u.Id, u => u);
-        var userRelDictSorted = userRelDict
-            .OrderBy(kv => kv.Value.Count)
-            .ToDictionary(kv => kv.Key, kv => kv.Value);
-        foreach (var (fromUserId, toUserToMsgs) in userRelDictSorted)
+        var fromUserIdToRels = userRelList.BuildFromUserIdToRelations();
+        foreach (var (fromUserId, rels) in fromUserIdToRels)
         {
-            var fromUser = idToUser[fromUserId];
+            if (!idToUser.TryGetValue(fromUserId, out var fromUser)) continue;
+
             var filePath = MSG_BY_USER_OUT_DIR_PATH + fromUser.RealName + ".csv";
             using var sw = new StreamWriter(filePath, false, Encoding.UTF8);
             sw.WriteLine("toUser.name,message.text");
-            foreach (var (toUserId, msgs) in toUserToMsgs)
+            foreach (var rel in rels)
             {
-                var toUser = idToUser[toUserId];
-                foreach (var msg in msgs)
+                if (!idToUser.TryGetValue(rel.ToUserId, out var toUser)) continue;
+
+                foreach (var msg in rel.Messages)
                 {
                     var escapedMsgText = msg.Text
                         .Replace(",", "，")
@@ -234,40 +289,47 @@ internal static class Program
     /// csvファイルに結果を出力する
     /// 列は送信者IDをid, 送信者名をname, アイコン画像urlをimageとする
     /// </summary>
-    static async Task OutputFiles(Dictionary<string, Dictionary<string, List<MessageEvent>>> userRelDict, List<User> activeUsers)
+    static async Task OutputFiles(UserRelationList userRelList, List<User> activeUsers)
     {
         const int STRENGTH_DIV = 5;
 
         // 事前データ準備
         var idToUser = activeUsers.ToDictionary(u => u.Id, u => u);
-        var relColCntMax = userRelDict.Sum(kv => kv.Value.Count);
-        var maxMsgCnt = userRelDict
-            .SelectMany(u => u.Value.Select(kv => kv.Value.Count))
-            .Max();
+        var relCnt = userRelList.CalcRelationCnt;
+        var maxMsgCnt = userRelList.CalcMaxMessageCnt;
 
-        // 繋がりが無いユーザーを先頭に持ってくることでグラフを編集しやすくする
-        var userRelDictSorted = userRelDict
-            .OrderBy(kv => kv.Value.Count)
+        var fromUserIdToRels = userRelList.BuildFromUserIdToRelations()
             .ToDictionary(kv => kv.Key, kv => kv.Value);
+        // 繋がりが無いユーザーを先頭に持ってくることでグラフを編集しやすくする
+        var activeUsersAscOrderByRelCnt = activeUsers
+            .OrderBy(u =>
+                fromUserIdToRels.TryGetValue(u.Id, out var toRel) ? toRel.Count : 0
+            )
+            .ToList();
 
         var csvBody = new StringBuilder();
         var relColLabels = new List<string>();
         var relNameLabels = new List<string>();
         var relColStrengths = new List<int>();
-        foreach (var (fromId, toIdToMsgs) in userRelDictSorted)
+        foreach (var fromUser in activeUsersAscOrderByRelCnt)
         {
-            var fromUser = idToUser[fromId];
+            var fromId = fromUser.Id;
+            var rels = fromUserIdToRels.TryGetValue(fromId, out var relsTmp)
+                ? relsTmp
+                : new List<UserRelation>();
 
-            var relCells = new string[relColCntMax];
-            foreach (var (toId, msgs) in toIdToMsgs)
+            var relCells = new string[relCnt];
+            foreach (var rel in rels)
             {
+                var toId = rel.ToUserId;
                 var toUser = idToUser[toId];
+
                 relCells[relColLabels.Count] = toId;
                 relColLabels.Add($"{fromId}to{toId}");
                 relNameLabels.Add($"{fromUser.RealName}->{toUser.RealName}");
 
                 // 相対的なメッセージ数によって関係の強さをSTRENGTH_CLASS_DIV段階に分ける
-                var norStrength = msgs.Count / (double)maxMsgCnt;
+                var norStrength = rel.Messages.Count / (double)maxMsgCnt;
                 // 1 ~ STRENGTH_CLASS_DIVの間をとらせたい
                 var strength = Math.Min(STRENGTH_DIV, (int)(norStrength * STRENGTH_DIV) + 1);
                 relColStrengths.Add(strength);
