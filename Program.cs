@@ -25,7 +25,7 @@ internal static class Program
     const string REL_PURE_CSV_FILE_PATH = OUT_DIR_PATH + "relation_pure.csv";
 
     // 何日前までのメッセージを取得するか
-    const int DAYS = 30;
+    const int DAYS = 7;
 
     // デバッグ用設定
     const bool IS_LOAD_MSG_FROM_FILE = false;
