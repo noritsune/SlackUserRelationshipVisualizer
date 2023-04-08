@@ -309,7 +309,6 @@ internal static class Program
 
         var csvBody = new StringBuilder();
         var relColLabels = new List<string>();
-        var relNameLabels = new List<string>();
         var relColStrengths = new List<int>();
         foreach (var fromUser in activeUsersAscOrderByRelCnt)
         {
@@ -326,7 +325,6 @@ internal static class Program
 
                 relCells[relColLabels.Count] = toId;
                 relColLabels.Add($"{fromId}to{toId}");
-                relNameLabels.Add($"{fromUser.RealName}->{toUser.RealName}");
 
                 // 相対的なメッセージ数によって関係の強さをSTRENGTH_CLASS_DIV段階に分ける
                 var norStrength = rel.Messages.Count / (double)maxMsgCnt;
@@ -351,9 +349,8 @@ internal static class Program
         for (var i = 0; i < relColLabels.Count; i++)
         {
             var colLabel = relColLabels[i];
-            var nameLabel = relNameLabels[i];
             var strength = relColStrengths[i];
-            relOptions.Add($"# connect: {{\"from\": \"{colLabel}\", \"to\": \"id\", \"label\": \"{nameLabel}\", \"style\": \"curved=1;fontSize=11;strokeWidth={strength};\"}}");
+            relOptions.Add($"# connect: {{\"from\": \"{colLabel}\", \"to\": \"id\", \"style\": \"curved=1;fontSize=11;strokeWidth={strength};\"}}");
         }
         var relOptionsStr = string.Join("\n", relOptions);
         drawIoOptionStr = drawIoOptionStr.Replace("$REL_OPTIONS$", relOptionsStr);
