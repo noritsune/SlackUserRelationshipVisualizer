@@ -266,7 +266,9 @@ internal static class Program
         {
             if (!idToUser.TryGetValue(fromUserId, out var fromUser)) continue;
 
-            var filePath = MSG_BY_USER_OUT_DIR_PATH + fromUser.RealName + ".csv";
+            // ファイル名に使用できないあらゆる文字を除去する
+            var escapedFromUserName = Regex.Replace(fromUser.RealName, "[\\\\/:*?\"<>|]", "");
+            var filePath = MSG_BY_USER_OUT_DIR_PATH + escapedFromUserName + ".csv";
             using var sw = new StreamWriter(filePath, false, Encoding.UTF8);
             sw.WriteLine("toUser.name,message.text");
             foreach (var rel in rels)
