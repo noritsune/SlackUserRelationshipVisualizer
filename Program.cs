@@ -461,4 +461,28 @@ internal static class Program
         // 最後がユニークである可能性が高い
         return words.Last();
     }
+
+
+    static async void DownloadIcons()
+    {
+        var slackApiToken = await File.ReadAllTextAsync(SLACK_API_TOKEN_FILE_PATH, Encoding.UTF8);
+        var slackClient = new SlackApiClient(slackApiToken);
+        var activeUsers = await FetchActiveUsers(slackClient);
+        foreach (var user in activeUsers)
+        {
+            // アイコンをoutput/icons/に保存する
+            var iconUrl = user.Profile.Image192;
+            var iconFileName = $"{user.Id}.png";
+            var iconOutPath = OUT_DIR_PATH + "icons/" + iconFileName;
+            DownloadIcon(iconUrl, iconOutPath);
+        }
+    }
+
+    static async void DownloadIcon(string iconUrl, string iconOutPath)
+    {
+        var client = new HttpClient();
+        var res = await client.GetAsync(iconUrl);
+        var bytes = await res.Content.ReadAsByteArrayAsync();
+        await File.WriteAllBytesAsync(iconOutPath, bytes);
+    }
 }
