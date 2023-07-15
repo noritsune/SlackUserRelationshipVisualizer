@@ -4,5 +4,4 @@ obj/
 *.DotSettings.user
 drawio/
 slackApiToken.txt
-openAiApiKey.txt
 output/

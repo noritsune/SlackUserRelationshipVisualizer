@@ -2,14 +2,10 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json;
-using OpenAI_API;
-using OpenAI_API.Chat;
-using OpenAI_API.Models;
 using SlackNet;
 using SlackNet.Events;
 using SlackNet.WebApi;
 using SlackUserRelationshipVisualizer;
-using Conversation = SlackNet.Conversation;
 using File = System.IO.File;
 
 internal static class Program
@@ -20,9 +16,7 @@ internal static class Program
 
     // 入力場所
     const string SLACK_API_TOKEN_FILE_PATH = IN_DIR_PATH + "slackApiToken.txt";
-    const string OPEN_AI_API_KEY_FILE_PATH = IN_DIR_PATH + "openAiApiKey.txt";
     const string DRAW_IO_OPTION_FILE_PATH = IN_DIR_PATH + "drawIoOption.txt";
-    const string PROMPT_BASE_FILE_PATH = IN_DIR_PATH + "fetchRelationWordPrompt.txt";
 
     // 出力場所
     const string MSG_BY_CHANNEL_OUT_DIR_PATH = OUT_DIR_PATH + "messages/channels/";
@@ -301,17 +295,6 @@ internal static class Program
     {
         const int STRENGTH_DIV = 5;
 
-        // GPT APIの料金概算用
-        var msgCharCntSum = userRelList.BuildFromUserIdToRelations().Values
-            .Sum(rels =>
-                rels.Sum(rel =>
-                    rel.Messages.Sum(msg =>
-                        msg.Text.Length
-                    )
-                )
-            );
-        Console.WriteLine($"文字数合計: {msgCharCntSum}");
-
         // 事前データ準備
         var idToUser = activeUsers.ToDictionary(u => u.Id, u => u);
         var relCnt = userRelList.CalcRelationCnt;
@@ -326,54 +309,9 @@ internal static class Program
             )
             .ToList();
 
-        var userIdSets = new List<HashSet<string>>();
-        for (int i = 0; i < activeUsers.Count; i++)
-        {
-            for (int j = i + 1; j < activeUsers.Count; j++)
-            {
-                userIdSets.Add(new HashSet<string>{ activeUsers[i].Id, activeUsers[j].Id });
-            }
-        }
-
-        var userIdSetAndMsgs = userIdSets
-            .Select(userIdSet =>
-            {
-                var userA = userIdSet.First();
-                var userB = userIdSet.Last();
-                var msgsAtoB = fromUserIdToRels.TryGetValue(userA, out var rels)
-                    ? rels.Where(rel => rel.ToUserId == userB).SelectMany(rel => rel.Messages.Select(msg => msg.Text))
-                    : new List<string>();
-                var msgsBtoA = fromUserIdToRels.TryGetValue(userB, out rels)
-                    ? rels.Where(rel => rel.ToUserId == userA).SelectMany(rel => rel.Messages.Select(msg => msg.Text))
-                    : new List<string>();
-                var msgs = msgsAtoB.Concat(msgsBtoA).ToList();
-                return (UserIdA: userIdSet.First(), UserIdB: userIdSet.Last(), Msgs: msgs);
-            })
-            .Where(tuple => tuple.Msgs.Count > 0)
-            .ToArray();
-
-        var userIdSetKeyToRelWord = new Dictionary<string, string>();
-        await Task.WhenAll(userIdSetAndMsgs.Select(async tuple =>
-        {
-            var key = string.Compare(tuple.UserIdA, tuple.UserIdB, StringComparison.Ordinal) < 0
-                ? $"{tuple.UserIdA},{tuple.UserIdB}"
-                : $"{tuple.UserIdB},{tuple.UserIdA}";
-            try
-            {
-                var relWord = await FetchRelationWord(tuple.Msgs);
-                userIdSetKeyToRelWord.Add(key, relWord);
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine(e);
-                userIdSetKeyToRelWord.Add(key, "");
-            }
-        }));
-
         var csvBody = new StringBuilder();
         var relColLabels = new List<string>();
         var relColStrengths = new List<int>();
-        var userSets = new List<(string fromId, string toId)>();
         foreach (var fromUser in activeUsersAscOrderByRelCnt)
         {
             var fromId = fromUser.Id;
@@ -385,7 +323,7 @@ internal static class Program
             foreach (var rel in rels)
             {
                 var toId = rel.ToUserId;
-                userSets.Add((fromId, toId));
+                var toUser = idToUser[toId];
 
                 relCells[relColLabels.Count] = toId;
                 relColLabels.Add($"{fromId}to{toId}");
@@ -412,15 +350,9 @@ internal static class Program
         var relOptions = new List<string>();
         for (var i = 0; i < relColLabels.Count; i++)
         {
-            var userSet = userSets[i];
-            var key = string.Compare(userSet.fromId, userSet.toId, StringComparison.Ordinal) < 0
-                ? $"{userSet.fromId},{userSet.toId}"
-                : $"{userSet.toId},{userSet.fromId}";
-            var relWord = userIdSetKeyToRelWord[key];
-
             var colLabel = relColLabels[i];
             var strength = relColStrengths[i];
-            relOptions.Add($"# connect: {{\"from\": \"{colLabel}\", \"to\": \"id\", \"label\": \"{relWord}\", \"style\": \"curved=1;fontSize=20;strokeWidth={strength};\"}}");
+            relOptions.Add($"# connect: {{\"from\": \"{colLabel}\", \"to\": \"id\", \"style\": \"curved=1;fontSize=11;strokeWidth={strength};\"}}");
         }
         var relOptionsStr = string.Join("\n", relOptions);
         drawIoOptionStr = drawIoOptionStr.Replace("$REL_OPTIONS$", relOptionsStr);
@@ -434,55 +366,5 @@ internal static class Program
 
         // 一応、関係表のみのcsvも出しておく
         await File.WriteAllTextAsync(REL_PURE_CSV_FILE_PATH, csvHeader + "\n" + csvBody);
-    }
-
-    static async Task<string> FetchRelationWord(List<string> msgs)
-    {
-        var apiKey = await File.ReadAllTextAsync(OPEN_AI_API_KEY_FILE_PATH, Encoding.UTF8);
-        var client = new OpenAIAPI(apiKey);
-        var joinedMsgs = string.Join("\n", msgs);
-        // 4000トークン制限のため2300文字以内に切り詰める
-        joinedMsgs = joinedMsgs.Substring(0, Math.Min(joinedMsgs.Length, 2300));
-        var prompt = (await File.ReadAllTextAsync(PROMPT_BASE_FILE_PATH, Encoding.UTF8))
-            .Replace("$MESSAGES$", joinedMsgs);
-        var chatMsgs = new List<ChatMessage>() { new (ChatMessageRole.User, prompt) };
-        var result = await client.Chat.CreateChatCompletionAsync(chatMsgs, model: Model.ChatGPTTurbo);
-        var res = result.Choices.First().Message.Content;
-        Console.WriteLine($"関係性の言葉: {res}");
-
-        if (string.IsNullOrEmpty(res))
-        {
-            return "";
-        }
-
-        var words = res.Contains(",")
-            ? res.Split(",")
-            : res.Split("\n");
-        // 最後がユニークである可能性が高い
-        return words.Last();
-    }
-
-
-    static async void DownloadIcons()
-    {
-        var slackApiToken = await File.ReadAllTextAsync(SLACK_API_TOKEN_FILE_PATH, Encoding.UTF8);
-        var slackClient = new SlackApiClient(slackApiToken);
-        var activeUsers = await FetchActiveUsers(slackClient);
-        foreach (var user in activeUsers)
-        {
-            // アイコンをoutput/icons/に保存する
-            var iconUrl = user.Profile.Image192;
-            var iconFileName = $"{user.Id}.png";
-            var iconOutPath = OUT_DIR_PATH + "icons/" + iconFileName;
-            DownloadIcon(iconUrl, iconOutPath);
-        }
-    }
-
-    static async void DownloadIcon(string iconUrl, string iconOutPath)
-    {
-        var client = new HttpClient();
-        var res = await client.GetAsync(iconUrl);
-        var bytes = await res.Content.ReadAsByteArrayAsync();
-        await File.WriteAllBytesAsync(iconOutPath, bytes);
     }
 }
