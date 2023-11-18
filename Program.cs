@@ -345,23 +345,39 @@ internal static class Program
             Directory.CreateDirectory(OUT_DIR_PATH);
         }
 
-        // draw.ioで読み込めるように、オプションを付けて出力する
-        var drawIoOptionStr = await File.ReadAllTextAsync(DRAW_IO_OPTION_FILE_PATH);
+        var csvForDrawIo = new StringBuilder();
+
+        var currentDate = DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss");
+        csvForDrawIo.AppendLine($"# 更新日時: {currentDate}");
+
+        // 前回の関係図に記載されている全てのconnectのfromを覚えておく
+        var sr = new StreamReader(REL_FOR_DRAW_IO_CSV_FILE_PATH);
+        var lastCsvForDrawIo = await sr.ReadToEndAsync();
+        sr.Close();
+        var colLabelRegex = @"# connect: \{""from"": ""(.+?)""";
+        var colLabelSetInLastExec = Regex.Matches(lastCsvForDrawIo, colLabelRegex)
+            .Select(match => match.Groups[1].Value)
+            .ToHashSet();
+
+        // 新たに現れたconnectのfromと前回の関係図のconnectのfromを比較し、一致しないものを赤色にする
         var relOptions = new List<string>();
         for (var i = 0; i < relColLabels.Count; i++)
         {
             var colLabel = relColLabels[i];
             var strength = relColStrengths[i];
-            relOptions.Add($"# connect: {{\"from\": \"{colLabel}\", \"to\": \"id\", \"style\": \"curved=1;fontSize=11;strokeWidth={strength};\"}}");
+            var color = colLabelSetInLastExec.Contains(colLabel) ? "black" : "#C94126";
+            relOptions.Add($"# connect: {{\"from\": \"{colLabel}\", \"to\": \"id\", \"style\": \"curved=1;fontSize=11;strokeWidth={strength};strokeColor={color};\"}}");
         }
         var relOptionsStr = string.Join("\n", relOptions);
-        drawIoOptionStr = drawIoOptionStr.Replace("$REL_OPTIONS$", relOptionsStr);
 
-        var csvForDrawIo = new StringBuilder();
+        var drawIoOptionStr = await File.ReadAllTextAsync(DRAW_IO_OPTION_FILE_PATH);
+        drawIoOptionStr = drawIoOptionStr.Replace("$REL_OPTIONS$", relOptionsStr);
         csvForDrawIo.AppendLine(drawIoOptionStr);
+
         var csvHeader = string.Join(",", baseColLabels.Concat(relColLabels));
         csvForDrawIo.AppendLine(csvHeader);
         csvForDrawIo.Append(csvBody);
+
         await File.WriteAllTextAsync(REL_FOR_DRAW_IO_CSV_FILE_PATH, csvForDrawIo.ToString());
 
         // 一応、関係表のみのcsvも出しておく
