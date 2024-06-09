@@ -30,4 +30,14 @@ public class UserRelation
             }
         }
     }
+
+    /// <returns>最も多くやり取りが行われているチャンネル名</returns>
+    public string FindPrimaryChannelLabel()
+    {
+        return _messages
+            .GroupBy(m => m.Channel)
+            .OrderByDescending(g => g.Count())
+            .First()
+            .Key;
+    }
 }

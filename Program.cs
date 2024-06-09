@@ -142,6 +142,10 @@ internal static class Program
             // ルートメッセージとスレッドメッセージを重複なしで結合したものがチャンネル内の全メッセージとなる
             var msgsInChannel = rootMsgs.Concat(msgsInThread).ToList();
             Console.WriteLine($"チャンネル: {conv.Name}のメッセージを取得成功。{msgsInChannel.Count}件");
+
+            // なぜかFetchしてきたMessageインスタンスのChannelはnullなのでここで入れる
+            msgsInChannel.ForEach(m => m.Channel = conv.Name);
+
             return msgsInChannel;
         }
         catch(Exception e)
@@ -296,8 +300,6 @@ internal static class Program
         const int STRENGTH_DIV = 5;
 
         // 事前データ準備
-        var idToUser = activeUsers.ToDictionary(u => u.Id, u => u);
-        var relCnt = userRelList.CalcRelationCnt;
         var maxMsgCnt = userRelList.CalcMaxMessageCnt;
 
         var fromUserIdToRels = userRelList.BuildFromUserIdToRelations()
@@ -310,8 +312,7 @@ internal static class Program
             .ToList();
 
         var csvBody = new StringBuilder();
-        var relColLabels = new List<string>();
-        var relColStrengths = new List<int>();
+        var relOptions = new List<(string RelLabel, int Strength, string PrimaryChannelLabel)>();
         foreach (var fromUser in activeUsersAscOrderByRelCnt)
         {
             var fromId = fromUser.Id;
@@ -319,26 +320,28 @@ internal static class Program
                 ? relsTmp
                 : new List<UserRelation>();
 
-            var relCells = new string[relCnt];
+            // csv部分のユーザー毎の行と関係行の情報を組み立てる。
+            // csv部分のユーザー毎の行の後半の関係マトリックス部分は列をずらしながらtoUserIdを入れていきたいのでrelCells[relOptions.Count]のような記述になっている
+            var relCells = new string[userRelList.CalcRelationCnt];
             foreach (var rel in rels)
             {
-                var toId = rel.ToUserId;
-                var toUser = idToUser[toId];
+                relCells[relOptions.Count] = rel.ToUserId;
 
-                relCells[relColLabels.Count] = toId;
-                relColLabels.Add($"{fromId}to{toId}");
+                var coLabel = $"{fromId}to{rel.ToUserId}";
 
                 // 相対的なメッセージ数によって関係の強さをSTRENGTH_CLASS_DIV段階に分ける
                 var norStrength = rel.Messages.Count / (double)maxMsgCnt;
                 // 1 ~ STRENGTH_CLASS_DIVの間をとらせたい
                 var strength = Math.Min(STRENGTH_DIV, (int)(norStrength * STRENGTH_DIV) + 1);
-                relColStrengths.Add(strength);
+
+                var primaryChannelLabel = rel.FindPrimaryChannelLabel();
+
+                relOptions.Add((coLabel, strength, primaryChannelLabel));
             }
 
             var baseCells = new List<string>() { fromId, fromUser.RealName, fromUser.Profile.Image48 };
             csvBody.AppendLine(string.Join(",", baseCells.Concat(relCells)));
         }
-        var baseColLabels = new List<string> { "id", "name", "image" };
 
         if (!Directory.Exists(OUT_DIR_PATH))
         {
@@ -355,27 +358,27 @@ internal static class Program
         var lastCsvForDrawIo = await sr.ReadToEndAsync();
         sr.Close();
         var colLabelRegex = @"# connect: \{""from"": ""(.+?)""";
-        var colLabelSetInLastExec = Regex.Matches(lastCsvForDrawIo, colLabelRegex)
+        var relLabelSetInLastExec = Regex.Matches(lastCsvForDrawIo, colLabelRegex)
             .Select(match => match.Groups[1].Value)
             .ToHashSet();
 
         // 新たに現れたconnectのfromと前回の関係図のconnectのfromを比較し、一致しないものを赤色にする
-        var relOptions = new List<string>();
-        for (var i = 0; i < relColLabels.Count; i++)
+        var relOptionStrs = relOptions.Select(relOpt =>
         {
-            var colLabel = relColLabels[i];
-            var strength = relColStrengths[i];
-            var color = colLabelSetInLastExec.Contains(colLabel) ? "black" : "#C94126";
-            relOptions.Add($"# connect: {{\"from\": \"{colLabel}\", \"to\": \"id\", \"style\": \"curved=1;fontSize=11;strokeWidth={strength};strokeColor={color};\"}}");
-        }
-        var relOptionsStr = string.Join("\n", relOptions);
+            var color = relLabelSetInLastExec.Contains(relOpt.RelLabel) ? "black" : "#C94126";
+            return $"# connect: {{\"from\": \"{relOpt.RelLabel}\", \"to\": \"id\", \"label\": \"{relOpt.PrimaryChannelLabel}\", \"style\": \"curved=1;fontSize=11;strokeWidth={relOpt.Strength};strokeColor={color};\"}}";
+        });
+        var relOptionsStr = string.Join("\n", relOptionStrs);
 
         var drawIoOptionStr = await File.ReadAllTextAsync(DRAW_IO_OPTION_FILE_PATH);
         drawIoOptionStr = drawIoOptionStr.Replace("$REL_OPTIONS$", relOptionsStr);
         csvForDrawIo.AppendLine(drawIoOptionStr);
 
-        var csvHeader = string.Join(",", baseColLabels.Concat(relColLabels));
+        var baseColLabels = new List<string> { "id", "name", "image" };
+        var relOptLabels = relOptions.Select(relOpt => relOpt.RelLabel).ToList();
+        var csvHeader = string.Join(",", baseColLabels.Concat(relOptLabels));
         csvForDrawIo.AppendLine(csvHeader);
+
         csvForDrawIo.Append(csvBody);
 
         await File.WriteAllTextAsync(REL_FOR_DRAW_IO_CSV_FILE_PATH, csvForDrawIo.ToString());

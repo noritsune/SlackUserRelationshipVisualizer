@@ -2,6 +2,7 @@
 
 public class JsonSafeMessage
 {
+    public string Channel;
     public string User;
     public string Text;
     public string Subtype;
@@ -13,6 +14,7 @@ public class JsonSafeMessage
     {
         return new JsonSafeMessage
         {
+            Channel = messageEvent.Channel,
             User = messageEvent.User,
             Text = messageEvent.Text,
             Subtype = messageEvent.Subtype,
@@ -26,6 +28,7 @@ public class JsonSafeMessage
     {
         return new MessageEvent
         {
+            Channel = Channel,
             User = User,
             Text = Text,
             Subtype = Subtype,
