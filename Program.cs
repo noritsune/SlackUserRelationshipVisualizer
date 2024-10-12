@@ -105,54 +105,47 @@ internal static class Program
     static async Task<List<MessageEvent>> FetchMessagesInChannel(SlackApiClient slackClient, Conversation conv, DateTime oldest)
     {
         Console.WriteLine($"チャンネル: {conv.Name}のメッセージを取得開始");
-        try
+
+        // ルートメッセージ群を取得
+        var rootMsgs = new List<MessageEvent>();
+        var sw = new Stopwatch();
+        sw.Start();
+        Console.WriteLine($"チャンネル: {conv.Name}のルートメッセージを取得開始");
+        string cursor = null;
+        do {
+            var convHistoryRes = await slackClient.Conversations.History(
+                conv.Id, oldestTs: oldest.ToTimestamp(), limit: 1000, cursor: cursor);
+            rootMsgs.AddRange(convHistoryRes.Messages);
+
+            cursor = convHistoryRes.ResponseMetadata.NextCursor;
+        } while (cursor != null);
+        Console.WriteLine($"チャンネル: {conv.Name}のルートメッセージを{rootMsgs.Count}件取得完了: {sw.Elapsed.Seconds}秒");
+
+        // スレッドメッセージ群を取得
+        var msgsInThread = new List<MessageEvent>();
+        var threadHeadMsgs = rootMsgs.Where(m => m.ReplyCount > 0).ToList();
+        // 時間を計測する
+        sw.Start();
+        Console.WriteLine($"チャンネル: {conv.Name}の{threadHeadMsgs.Count}件のスレッドの返信を取得開始");
+        // スレッド内の返信を並列で全て取得する
+        await Task.WhenAll(threadHeadMsgs.Select(async rootMsg =>
         {
-            // ルートメッセージ群を取得
-            var rootMsgs = new List<MessageEvent>();
-            var sw = new Stopwatch();
-            sw.Start();
-            Console.WriteLine($"チャンネル: {conv.Name}のルートメッセージを取得開始");
-            string cursor = null;
-            do {
-                var convHistoryRes = await slackClient.Conversations.History(
-                    conv.Id, oldestTs: oldest.ToTimestamp(), limit: 1000, cursor: cursor);
-                rootMsgs.AddRange(convHistoryRes.Messages);
+            var threadHistoryRes = await slackClient.Conversations.Replies(
+                conv.Id, rootMsg.Ts, oldestTs: oldest.ToTimestamp(), limit: 1000);
+            var replyMsgs = threadHistoryRes.Messages.Where(m => m.Ts != rootMsg.Ts).ToList();
+            msgsInThread.AddRange(replyMsgs);
+        }));
+        sw.Stop();
+        Console.WriteLine($"チャンネル: {conv.Name}の{threadHeadMsgs.Count}件のスレッドの返信を取得完了: {sw.Elapsed.Seconds}秒");
 
-                cursor = convHistoryRes.ResponseMetadata.NextCursor;
-            } while (cursor != null);
-            Console.WriteLine($"チャンネル: {conv.Name}のルートメッセージを{rootMsgs.Count}件取得完了: {sw.Elapsed.Seconds}秒");
+        // ルートメッセージとスレッドメッセージを重複なしで結合したものがチャンネル内の全メッセージとなる
+        var msgsInChannel = rootMsgs.Concat(msgsInThread).ToList();
+        Console.WriteLine($"チャンネル: {conv.Name}のメッセージを取得成功。{msgsInChannel.Count}件");
 
-            // スレッドメッセージ群を取得
-            var msgsInThread = new List<MessageEvent>();
-            var threadHeadMsgs = rootMsgs.Where(m => m.ReplyCount > 0).ToList();
-            // 時間を計測する
-            sw.Start();
-            Console.WriteLine($"チャンネル: {conv.Name}の{threadHeadMsgs.Count}件のスレッドの返信を取得開始");
-            // スレッド内の返信を並列で全て取得する
-            await Task.WhenAll(threadHeadMsgs.Select(async rootMsg =>
-            {
-                var threadHistoryRes = await slackClient.Conversations.Replies(
-                    conv.Id, rootMsg.Ts, oldestTs: oldest.ToTimestamp(), limit: 1000);
-                var replyMsgs = threadHistoryRes.Messages.Where(m => m.Ts != rootMsg.Ts).ToList();
-                msgsInThread.AddRange(replyMsgs);
-            }));
-            sw.Stop();
-            Console.WriteLine($"チャンネル: {conv.Name}の{threadHeadMsgs.Count}件のスレッドの返信を取得完了: {sw.Elapsed.Seconds}秒");
+        // なぜかFetchしてきたMessageインスタンスのChannelはnullなのでここで入れる
+        msgsInChannel.ForEach(m => m.Channel = conv.Name);
 
-            // ルートメッセージとスレッドメッセージを重複なしで結合したものがチャンネル内の全メッセージとなる
-            var msgsInChannel = rootMsgs.Concat(msgsInThread).ToList();
-            Console.WriteLine($"チャンネル: {conv.Name}のメッセージを取得成功。{msgsInChannel.Count}件");
-
-            // なぜかFetchしてきたMessageインスタンスのChannelはnullなのでここで入れる
-            msgsInChannel.ForEach(m => m.Channel = conv.Name);
-
-            return msgsInChannel;
-        }
-        catch(Exception e)
-        {
-            Console.WriteLine($"チャンネル: {conv.Name}のメッセージを取得失敗:" + e.Message);
-            return new List<MessageEvent>();
-        }
+        return msgsInChannel;
     }
 
     static async Task<List<MessageEvent>> LoadMessagesFromFile()
