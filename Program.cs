@@ -68,8 +68,15 @@ internal static class Program
     static async Task<List<Conversation>> FetchChannels(SlackApiClient slackClient)
     {
         var types = new[] { ConversationType.PublicChannel, ConversationType.PrivateChannel };
-        var convListRes = await slackClient.Conversations.List(excludeArchived:true, limit: 1000, types: types);
-        return convListRes.Channels.ToList();
+        var channels = new List<Conversation>();
+        var cursor = "";
+        do
+        {
+            var convListRes = await slackClient.Conversations.List(excludeArchived:true, limit: 1000, types: types, cursor: cursor);
+            channels.AddRange(convListRes.Channels);
+            cursor = convListRes.ResponseMetadata.NextCursor;
+        } while (cursor != "");
+        return channels;
     }
 
     static async Task<List<MessageEvent>> FetchMessagesInChannels(List<Conversation> channels, SlackApiClient slackClient)
