@@ -32,7 +32,7 @@ internal static class Program
 
     static async Task Main()
     {
-        var slackApiToken = await File.ReadAllTextAsync(SLACK_API_TOKEN_FILE_PATH, Encoding.UTF8);
+        var slackApiToken = (await File.ReadAllLinesAsync(SLACK_API_TOKEN_FILE_PATH, Encoding.UTF8)).FirstOrDefault() ?? "";
         var slackClient = new SlackApiClient(slackApiToken);
 
         var channels = await FetchChannels(slackClient);
