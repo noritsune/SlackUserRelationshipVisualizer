@@ -2,16 +2,17 @@
 
 public class JsonSafeMessage
 {
-    public string Channel;
-    public string User;
-    public string Text;
-    public string Subtype;
-    public string Ts;
-    public string ThreadTs;
+    public string? Channel;
+    public string? User;
+    public string? Text;
+    public string? Subtype;
+    public string? Ts;
+    public string? ThreadTs;
     public int ReplyCount;
 
-    public static JsonSafeMessage FromMessageEvent(MessageEvent messageEvent)
+    public static JsonSafeMessage? FromMessageEvent(MessageEvent? messageEvent)
     {
+        if (messageEvent == null) return null;
         return new JsonSafeMessage
         {
             Channel = messageEvent.Channel,

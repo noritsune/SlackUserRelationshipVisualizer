@@ -101,6 +101,7 @@ internal static class Program
 
             var filePath = MSG_BY_CHANNEL_OUT_DIR_PATH + conv.Name + ".json";
             var msgsInChannelJsonSafe = messagesInChannel
+                .Where(m => m != null)
                 .Select(JsonSafeMessage.FromMessageEvent)
                 .ToList();
             await File.WriteAllTextAsync(filePath, JsonConvert.SerializeObject(msgsInChannelJsonSafe, Formatting.Indented));
@@ -150,7 +151,7 @@ internal static class Program
         Console.WriteLine($"チャンネル: {conv.Name}のメッセージを取得成功。{msgsInChannel.Count}件");
 
         // なぜかFetchしてきたMessageインスタンスのChannelはnullなのでここで入れる
-        msgsInChannel.ForEach(m => m.Channel = conv.Name);
+        msgsInChannel.ForEach(m => { if (m != null) m.Channel = conv.Name; });
 
         return msgsInChannel;
     }
